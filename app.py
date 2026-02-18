@@ -131,9 +131,9 @@ def init_db():
     
     if count == 0:
         # Create default admin
-        hashed_pass = generate_password_hash("admin123")
-        cursor.execute("INSERT INTO admins (username, password) VALUES (?, ?)", ("admin", hashed_pass))
-        print("✅ Default admin created: admin / admin123")
+        hashed_pass = generate_password_hash("Aaham@8990")
+        cursor.execute("INSERT INTO admins (username, password) VALUES (?, ?)", ("aaham_18", hashed_pass))
+        print("✅ Default admin created: aaham_18ss / Aaham@8990")
     else:
         print(f"✅ Admins table has {count} record(s)")
 
@@ -868,7 +868,7 @@ if __name__ == "__main__":
     print("🚀 CUTM RESULT PORTAL STARTING...")
     print("="*60)
     print("📂 Database:", DB_NAME)
-    print("👤 Default Admin: admin / admin123")
+    print("👤 Default Admin: xyz / xyz123")
     print("🌐 URL: http://127.0.0.1:5000")
     print("="*60 + "\n")
     
