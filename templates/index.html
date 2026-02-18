@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="home-container">
+
+    <!-- Left Side - Result Search Card -->
+    <div class="home-card">
+        <h1 class="home-title">
+            <i class="fas fa-graduation-cap"></i> Student Result Portal
+        </h1>
+
+        <form action="/search" method="POST" class="result-form">
+
+            <div class="form-group">
+                <label>
+                    <i class="fas fa-id-card"></i> Registration Number:
+                </label>
+                <input type="text" name="regd_no" 
+                       placeholder="Enter Registration Number" 
+                       required
+                       pattern="[0-9]+"
+                       title="Please enter valid registration number">
+            </div>
+
+            <div class="form-group">
+                <label>
+                    <i class="fas fa-calendar"></i> Select Year:
+                </label>
+                <select name="year" required>
+                    <option value="">-- Select Year --</option>
+                    <option value="2023">2023</option>
+                    <option value="2024">2024</option>
+                    <option value="2025">2025</option>
+                    <option value="2026">2026</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>
+                    <i class="fas fa-book"></i> Select Semester:
+                </label>
+                <select name="semester" required>
+                    <option value="">-- Select Semester --</option>
+                    <option value="Sem 1">Semester 1</option>
+                    <option value="Sem 2">Semester 2</option>
+                    <option value="Sem 3">Semester 3</option>
+                    <option value="Sem 4">Semester 4</option>
+                    <option value="Sem 5">Semester 5</option>
+                    <option value="Sem 6">Semester 6</option>
+                    <option value="Sem 7">Semester 7</option>
+                    <option value="Sem 8">Semester 8</option>
+                </select>
+            </div>
+
+            <button type="submit" class="btn-search">
+                <i class="fas fa-search"></i> Search Result
+            </button>
+
+        </form>
+
+        <!-- Quick Stats -->
+        <div class="stats-box" style="margin-top: 30px;">
+            <div class="stat-card">
+                <h3>Total Students</h3>
+                <p>2,500+</p>
+            </div>
+            <div class="stat-card">
+                <h3>Semesters</h3>
+                <p>1-8</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Side - Notice Board -->
+    <div class="notice-board">
+        <h2 class="notice-title">
+            <i class="fas fa-bullhorn"></i> Notice Board
+        </h2>
+
+        <div class="notice-list">
+            {% if notices %}
+                {% for n in notices %}
+                    <div class="notice-item">
+                        <h3>
+                            <i class="fas fa-bell"></i> {{ n[0] }}
+                        </h3>
+                        <p>{{ n[1] }}</p>
+                        <small>
+                            <i class="fas fa-clock"></i> {{ n[2] }}
+                        </small>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <div class="notice-item" style="text-align: center;">
+                    <i class="fas fa-info-circle" style="font-size: 2rem; color: var(--gray);"></i>
+                    <p style="margin-top: 10px;">No Notices Available</p>
+                </div>
+            {% endif %}
+        </div>
+
+        <!-- Important Links -->
+        <div class="links-box" style="margin-top: 20px;">
+            <h2><i class="fas fa-link"></i> Quick Links</h2>
+            <ul>
+                <li><a href="/about"><i class="fas fa-info-circle"></i> About Portal</a></li>
+                <li><a href="/contact"><i class="fas fa-envelope"></i> Contact Support</a></li>
+                <li><a href="/admin"><i class="fas fa-user-shield"></i> Admin Login</a></li>
+            </ul>
+        </div>
+    </div>
+
+</div>
+
+{% endblock %}

@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="result-card">
+
+    <h1 class="result-title">
+        <i class="fas fa-bullhorn"></i> Manage Notices
+    </h1>
+
+    <div class="table-container">
+        <table class="result-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Title</th>
+                    <th>Message</th>
+                    <th>Posted Date</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% if notices %}
+                    {% for n in notices %}
+                    <tr>
+                        <td><b>#{{ n[0] }}</b></td>
+                        <td><b style="color: var(--primary);">{{ n[1] }}</b></td>
+                        <td style="text-align:left;">{{ n[2] }}</td>
+                        <td><i class="fas fa-calendar"></i> {{ n[3] }}</td>
+                        <td>
+                            <a href="/admin/delete_notice/{{ n[0] }}" 
+                               class="delete-btn"
+                               style="color: var(--danger); font-weight: bold; text-decoration: none;"
+                               onclick="return confirm('Delete this notice?');">
+                                <i class="fas fa-trash"></i> Delete
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="5" style="text-align:center; padding: 40px;">
+                            <i class="fas fa-bell-slash" style="font-size: 3rem; color: var(--gray);"></i>
+                            <p style="margin-top: 15px; font-weight: bold;">No Notices Found</p>
+                        </td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="btn-group">
+        <a href="/admin/add_notice" class="download-btn">
+            <i class="fas fa-plus"></i> Add New Notice
+        </a>
+        <a href="/admin/dashboard" class="back-btn">
+            <i class="fas fa-arrow-left"></i> Back
+        </a>
+    </div>
+
+</div>
+{% endblock %}

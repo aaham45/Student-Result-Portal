@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="result-card">
+
+    <h1 class="result-title">
+        <i class="fas fa-graduation-cap"></i> Student Result
+    </h1>
+
+    <!-- Student Information -->
+    <div class="student-info">
+        <p><b><i class="fas fa-user"></i> Name:</b> {{ student_name }}</p>
+        <p><b><i class="fas fa-id-card"></i> Registration No:</b> {{ reg_no }}</p>
+        <p><b><i class="fas fa-book-open"></i> Semester:</b> {{ semester }}</p>
+    </div>
+
+    <!-- Status -->
+    <div class="status-box">
+        <h2 class="{% if backlog_count > 0 %}fail{% else %}pass{% endif %}">
+            <i class="fas fa-{% if backlog_count > 0 %}times-circle{% else %}check-circle{% endif %}"></i>
+            Status: {{ status }}
+        </h2>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="summary-box">
+        <div class="summary-item">
+            <h3><i class="fas fa-book"></i> Subjects</h3>
+            <p>{{ subject_count }}</p>
+        </div>
+
+        <div class="summary-item">
+            <h3><i class="fas fa-star"></i> Sem Credits</h3>
+            <p>{{ sem_credits }}</p>
+        </div>
+
+        <div class="summary-item">
+            <h3><i class="fas fa-trophy"></i> Total Credits</h3>
+            <p>{{ total_credits }}</p>
+        </div>
+
+        <div class="summary-item">
+            <h3><i class="fas fa-chart-line"></i> SGPA</h3>
+            <p>{{ sgpa }}</p>
+        </div>
+
+        <div class="summary-item">
+            <h3><i class="fas fa-chart-bar"></i> CGPA</h3>
+            <p>{{ cgpa }}</p>
+        </div>
+    </div>
+
+    <!-- Subject Wise Result -->
+    <h2 class="table-heading">
+        <i class="fas fa-table"></i> Subject Wise Result
+    </h2>
+
+    <div class="table-container">
+        <table class="result-table">
+            <thead>
+                <tr>
+                    <th>Subject Code</th>
+                    <th>Subject Name</th>
+                    <th>Credits</th>
+                    <th>Grade</th>
+                    <th>Grade Point</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for row in rows %}
+                <tr class="{% if row[3] == 'F' %}backlog-row{% endif %}">
+                    <td><b>{{ row[0] }}</b></td>
+                    <td style="text-align:left;">{{ row[1] }}</td>
+                    <td>{{ row[2] }}</td>
+
+                    <td class="{% if row[3] == 'F' %}grade-fail{% else %}grade-pass{% endif %}">
+                        <b>{{ row[3] }}</b>
+                    </td>
+
+                    <td>{{ row[5] }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="btn-group">
+        <a href="/download_pdf/{{ reg_no }}/{{ semester.replace(' ', '_') }}" class="download-btn">
+            <i class="fas fa-file-pdf"></i> Download PDF
+        </a>
+
+        <a href="/" class="back-btn">
+            <i class="fas fa-arrow-left"></i> Back to Home
+        </a>
+    </div>
+
+    <!-- Disclaimer -->
+    <p style="text-align: center; color: var(--gray); margin-top: 20px; font-size: 0.9rem;">
+        <i class="fas fa-info-circle"></i> This is a computer generated marksheet.
+    </p>
+
+</div>
+{% endblock %}

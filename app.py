@@ -1,0 +1,875 @@
+from flask import Flask, render_template, request, redirect, url_for, flash, session, send_file
+import sqlite3
+import pandas as pd
+import os
+import io
+from datetime import datetime
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from werkzeug.security import generate_password_hash, check_password_hash
+
+app = Flask(__name__)
+app.secret_key = "resultportal_secret_key_2026_secure"
+
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_NAME = os.path.join(BASE_DIR, "database.db")
+
+
+# ------------------ CUTM GRADE POINTS SYSTEM ------------------
+GRADE_POINTS = {
+    "O": 10,
+    "E": 9,
+    "A": 8,
+    "B": 7,
+    "C": 6,
+    "D": 5,
+    "F": 2,
+    "M": 0,
+    "S": 0,
+    "P": 8,
+    "AB": 0,
+    "I": 0
+}
+
+
+# ------------------ CREDIT STRING TO FLOAT ------------------
+def credit_to_float(credit_str):
+    try:
+        if pd.isna(credit_str):
+            return 0
+        parts = str(credit_str).split("+")
+        total = 0
+        for p in parts:
+            total += float(p.strip())
+        return total
+    except:
+        return 0
+
+
+# ------------------ DATABASE SETUP ------------------
+def init_db():
+    """Initialize database with all required tables"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    # Results table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT NOT NULL,
+            reg_no TEXT NOT NULL,
+            name TEXT NOT NULL,
+            subject_code TEXT NOT NULL,
+            subject_name TEXT NOT NULL,
+            credits TEXT,
+            credit_value REAL,
+            grade TEXT,
+            grade_point REAL,
+            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Admins table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS admins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_login TIMESTAMP
+        )
+    """)
+
+    # Upload history table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS upload_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT,
+            filename TEXT,
+            upload_type TEXT,
+            inserted INTEGER,
+            updated INTEGER,
+            skipped INTEGER,
+            upload_time TEXT,
+            uploaded_by TEXT
+        )
+    """)
+
+    # Notices table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            posted_on TEXT,
+            posted_by TEXT
+        )
+    """)
+
+    # Students table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reg_no TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            email TEXT,
+            phone TEXT,
+            batch INTEGER,
+            branch TEXT,
+            photo TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Check if admins table is empty
+    cursor.execute("SELECT COUNT(*) FROM admins")
+    count = cursor.fetchone()[0]
+    
+    if count == 0:
+        # Create default admin
+        hashed_pass = generate_password_hash("admin123")
+        cursor.execute("INSERT INTO admins (username, password) VALUES (?, ?)", ("admin", hashed_pass))
+        print("✅ Default admin created: admin / admin123")
+    else:
+        print(f"✅ Admins table has {count} record(s)")
+
+    conn.commit()
+    conn.close()
+    print("✅ Database initialized successfully")
+
+
+# Initialize database
+init_db()
+
+
+# ------------------ HOME PAGE ------------------
+@app.route("/")
+def home():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT title, message, posted_on FROM notices ORDER BY id DESC LIMIT 5")
+    notices = cursor.fetchall()
+
+    conn.close()
+    return render_template("index.html", notices=notices)
+
+
+# ------------------ ABOUT PAGE ------------------
+@app.route("/about")
+def about():
+    return render_template("about.html")
+
+
+# ------------------ CONTACT PAGE ------------------
+@app.route("/contact")
+def contact():
+    return render_template("contact.html")
+
+
+# ------------------ SEARCH RESULT ------------------
+@app.route("/search", methods=["POST"])
+def search_result():
+    reg_no = request.form.get("regd_no", "").strip()
+    year = request.form.get("year", "").strip()
+    semester = request.form.get("semester", "").strip()
+
+    if not reg_no or not year or not semester:
+        flash("❌ Please fill all fields!", "error")
+        return redirect(url_for("home"))
+
+    full_semester = f"{year} {semester}"
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT subject_code, subject_name, credits, grade, credit_value, grade_point, name
+        FROM results 
+        WHERE reg_no=? AND semester=?
+        ORDER BY subject_code
+    """, (reg_no, full_semester))
+
+    rows = cursor.fetchall()
+
+    if not rows:
+        conn.close()
+        flash("❌ Result not found! Please check Registration Number, Year or Semester.", "error")
+        return render_template("error.html", message="Result not found! Please check Registration Number, Year or Semester.")
+
+    student_name = rows[0][6]
+
+    # Calculate SGPA
+    sem_total_credits = 0
+    sem_credit_index = 0
+
+    for r in rows:
+        sem_total_credits += float(r[4])
+        sem_credit_index += float(r[4]) * float(r[5])
+
+    sgpa = round(sem_credit_index / sem_total_credits, 2) if sem_total_credits > 0 else 0
+
+    # Calculate CGPA
+    cursor.execute("""
+        SELECT credit_value, grade_point
+        FROM results
+        WHERE reg_no=?
+    """, (reg_no,))
+    all_data = cursor.fetchall()
+    conn.close()
+
+    total_all_credits = 0
+    total_credit_index = 0
+
+    for r in all_data:
+        total_all_credits += float(r[0])
+        total_credit_index += float(r[0]) * float(r[1])
+
+    cgpa = round(total_credit_index / total_all_credits, 2) if total_all_credits > 0 else 0
+
+    # Check backlog
+    backlog_count = 0
+    for r in rows:
+        if str(r[3]).strip().upper() == "F":
+            backlog_count += 1
+
+    status = "PASS" if backlog_count == 0 else f"FAIL ({backlog_count} Backlogs)"
+
+    return render_template(
+        "result.html",
+        reg_no=reg_no,
+        semester=full_semester,
+        student_name=student_name,
+        rows=rows,
+        subject_count=len(rows),
+        sem_credits=round(sem_total_credits, 2),
+        total_credits=round(total_all_credits, 2),
+        sgpa=sgpa,
+        cgpa=cgpa,
+        status=status,
+        backlog_count=backlog_count
+    )
+
+
+# ------------------ DOWNLOAD PDF ------------------
+@app.route("/download_pdf/<reg_no>/<semester>")
+def download_pdf(reg_no, semester):
+    semester = semester.replace("_", " ")
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT subject_code, subject_name, credits, grade, credit_value, grade_point, name
+        FROM results
+        WHERE reg_no=? AND semester=?
+        ORDER BY subject_code
+    """, (reg_no, semester))
+
+    rows = cursor.fetchall()
+
+    if not rows:
+        conn.close()
+        flash("❌ Result not found for PDF generation!", "error")
+        return redirect(url_for("home"))
+
+    student_name = rows[0][6]
+
+    # Calculate SGPA
+    sem_total_credits = 0
+    sem_credit_index = 0
+
+    for r in rows:
+        sem_total_credits += float(r[4])
+        sem_credit_index += float(r[4]) * float(r[5])
+
+    sgpa = round(sem_credit_index / sem_total_credits, 2) if sem_total_credits > 0 else 0
+
+    # Calculate CGPA
+    cursor.execute("""
+        SELECT credit_value, grade_point
+        FROM results
+        WHERE reg_no=?
+    """, (reg_no,))
+    all_data = cursor.fetchall()
+    conn.close()
+
+    total_all_credits = 0
+    total_credit_index = 0
+
+    for r in all_data:
+        total_all_credits += float(r[0])
+        total_credit_index += float(r[0]) * float(r[1])
+
+    cgpa = round(total_credit_index / total_all_credits, 2) if total_all_credits > 0 else 0
+
+    generated_on = datetime.now().strftime("%d-%m-%Y %I:%M %p")
+
+    # Create PDF
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+
+    # Header
+    pdf.setFont("Helvetica-Bold", 18)
+    pdf.drawString(200, height - 50, "CUTM Result Portal")
+
+    pdf.setFont("Helvetica", 12)
+    pdf.drawString(230, height - 70, "Official Marksheet")
+
+    pdf.line(40, height - 85, width - 40, height - 85)
+
+    # Student Info
+    pdf.setFont("Helvetica-Bold", 12)
+    pdf.drawString(50, height - 120, "Student Name:")
+    pdf.setFont("Helvetica", 12)
+    pdf.drawString(160, height - 120, student_name)
+
+    pdf.setFont("Helvetica-Bold", 12)
+    pdf.drawString(50, height - 140, "Registration No:")
+    pdf.setFont("Helvetica", 12)
+    pdf.drawString(160, height - 140, reg_no)
+
+    pdf.setFont("Helvetica-Bold", 12)
+    pdf.drawString(50, height - 160, "Semester:")
+    pdf.setFont("Helvetica", 12)
+    pdf.drawString(160, height - 160, semester)
+
+    # SGPA & CGPA
+    pdf.setFont("Helvetica-Bold", 12)
+    pdf.drawString(50, height - 190, "SGPA:")
+    pdf.setFont("Helvetica", 12)
+    pdf.drawString(110, height - 190, str(sgpa))
+
+    pdf.setFont("Helvetica-Bold", 12)
+    pdf.drawString(200, height - 190, "CGPA:")
+    pdf.setFont("Helvetica", 12)
+    pdf.drawString(260, height - 190, str(cgpa))
+
+    # Table Header
+    y = height - 240
+    pdf.setFont("Helvetica-Bold", 11)
+
+    pdf.setFillColorRGB(0.2, 0.2, 0.2)
+    pdf.rect(40, y, width - 80, 20, fill=True, stroke=False)
+
+    pdf.setFillColorRGB(1, 1, 1)
+    pdf.drawString(50, y + 5, "Subject Code")
+    pdf.drawString(150, y + 5, "Subject Name")
+    pdf.drawString(420, y + 5, "Credits")
+    pdf.drawString(500, y + 5, "Grade")
+
+    # Table Data
+    y -= 25
+    pdf.setFillColorRGB(0, 0, 0)
+    pdf.setFont("Helvetica", 10)
+
+    for r in rows:
+        pdf.drawString(50, y, str(r[0]))
+        pdf.drawString(150, y, str(r[1])[:45])
+        pdf.drawString(430, y, str(r[2]))
+        pdf.drawString(505, y, str(r[3]))
+        y -= 20
+
+        if y < 80:
+            pdf.showPage()
+            y = height - 60
+
+    # Footer
+    pdf.line(40, 70, width - 40, 70)
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(50, 55, f"Generated on: {generated_on}")
+    pdf.drawString(50, 40, "This is a computer generated marksheet.")
+
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(420, 40, "Controller of Examination")
+
+    pdf.save()
+    buffer.seek(0)
+
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=f"{reg_no}_{semester.replace(' ', '_')}_marksheet.pdf",
+        mimetype="application/pdf"
+    )
+
+
+# ------------------ ADMIN LOGIN (FIXED) ------------------
+@app.route("/admin", methods=["GET", "POST"])
+def admin_login():
+    """Admin login page - FIXED"""
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "").strip()
+
+        if not username or not password:
+            flash("❌ Please enter username and password!", "error")
+            return render_template("admin_login.html")
+
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+
+            # Get admin from database
+            cursor.execute("SELECT id, username, password FROM admins WHERE username=?", (username,))
+            admin = cursor.fetchone()
+
+            if admin:
+                # Verify password
+                if check_password_hash(admin[2], password):
+                    # Update last login
+                    now = datetime.now().strftime("%d-%m-%Y %I:%M %p")
+                    cursor.execute("UPDATE admins SET last_login=? WHERE id=?", (now, admin[0]))
+                    conn.commit()
+
+                    # Set session
+                    session["admin"] = True
+                    session["admin_id"] = admin[0]
+                    session["admin_user"] = admin[1]
+                    session["last_login"] = now
+
+                    flash(f"✅ Welcome back, {admin[1]}!", "success")
+                    conn.close()
+                    return redirect(url_for("admin_dashboard"))
+                else:
+                    flash("❌ Invalid password!", "error")
+            else:
+                flash("❌ Username not found!", "error")
+
+            conn.close()
+
+        except Exception as e:
+            flash(f"❌ Login error: {str(e)}", "error")
+
+    return render_template("admin_login.html")
+
+
+# ------------------ ADMIN DASHBOARD ------------------
+@app.route("/admin/dashboard", methods=["GET", "POST"])
+def admin_dashboard():
+    if "admin" not in session:
+        flash("⚠️ Please login first!", "warning")
+        return redirect(url_for("admin_login"))
+
+    if request.method == "POST":
+        year = request.form.get("year")
+        semester = request.form.get("semester")
+        upload_type = request.form.get("upload_type")
+        file = request.files.get("file")
+
+        if not year or not semester or not upload_type:
+            flash("⚠️ Please select all fields!", "warning")
+            return redirect(url_for("admin_dashboard"))
+
+        if not file or file.filename == '':
+            flash("⚠️ Please select a file!", "warning")
+            return redirect(url_for("admin_dashboard"))
+
+        if file and (file.filename.endswith(".xls") or file.filename.endswith(".xlsx")):
+            filepath = os.path.join(app.config["UPLOAD_FOLDER"], file.filename)
+            file.save(filepath)
+
+            try:
+                df = pd.read_excel(filepath)
+
+                # Check required columns
+                required_cols = ["Reg_No", "Name", "Subject_Code", "Subject_Name", "Credits", "Grade"]
+                missing_cols = []
+                for col in required_cols:
+                    if col not in df.columns:
+                        missing_cols.append(col)
+
+                if missing_cols:
+                    flash(f"❌ Missing columns: {', '.join(missing_cols)}", "error")
+                    return redirect(url_for("admin_dashboard"))
+
+                conn = sqlite3.connect(DB_NAME)
+                cursor = conn.cursor()
+
+                inserted_count = 0
+                updated_count = 0
+                skipped_count = 0
+
+                full_semester = f"{year} {semester}"
+
+                for _, row in df.iterrows():
+                    try:
+                        reg_no = str(row["Reg_No"]).split(".")[0].strip()
+                        name = str(row["Name"]).strip()
+                        subject_code = str(row["Subject_Code"]).strip()
+                        subject_name = str(row["Subject_Name"]).strip()
+                        credits = str(row["Credits"]).strip()
+                        credit_value = credit_to_float(credits)
+
+                        old_grade = str(row["Grade"]).strip().upper()
+                        new_grade = old_grade
+
+                        # Check for new grade columns in rechecking
+                        if "New Grade" in df.columns and pd.notna(row["New Grade"]):
+                            new_grade = str(row["New Grade"]).strip().upper()
+                        elif "New_Grade" in df.columns and pd.notna(row["New_Grade"]):
+                            new_grade = str(row["New_Grade"]).strip().upper()
+                        elif "New_Grad" in df.columns and pd.notna(row["New_Grad"]):
+                            new_grade = str(row["New_Grad"]).strip().upper()
+
+                        grade_point = GRADE_POINTS.get(new_grade, 0)
+
+                        # Check if record exists
+                        cursor.execute("""
+                            SELECT id FROM results
+                            WHERE semester=? AND reg_no=? AND subject_code=?
+                        """, (full_semester, reg_no, subject_code))
+
+                        existing = cursor.fetchone()
+
+                        # For rechecking, only update if old grade was F
+                        if upload_type == "rechecking" and old_grade != "F":
+                            skipped_count += 1
+                            continue
+
+                        if existing:
+                            cursor.execute("""
+                                UPDATE results
+                                SET grade=?, grade_point=?, credits=?, credit_value=?, subject_name=?, name=?
+                                WHERE semester=? AND reg_no=? AND subject_code=?
+                            """, (
+                                new_grade, grade_point, credits, credit_value, subject_name, name,
+                                full_semester, reg_no, subject_code
+                            ))
+                            updated_count += 1
+                        else:
+                            cursor.execute("""
+                                INSERT INTO results
+                                (semester, reg_no, name, subject_code, subject_name, credits, credit_value, grade, grade_point)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                full_semester, reg_no, name, subject_code, subject_name,
+                                credits, credit_value, new_grade, grade_point
+                            ))
+                            inserted_count += 1
+
+                    except Exception as e:
+                        print(f"Error processing row: {e}")
+                        skipped_count += 1
+                        continue
+
+                # Save to upload history
+                upload_time = datetime.now().strftime("%d-%m-%Y %I:%M %p")
+                username = session.get("admin_user", "Unknown")
+
+                cursor.execute("""
+                    INSERT INTO upload_history
+                    (semester, filename, upload_type, inserted, updated, skipped, upload_time, uploaded_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (full_semester, file.filename, upload_type, inserted_count, updated_count, skipped_count, upload_time, username))
+
+                conn.commit()
+                conn.close()
+
+                flash(f"✅ Upload Successful! Inserted: {inserted_count}, Updated: {updated_count}, Skipped: {skipped_count}", "success")
+
+            except Exception as e:
+                flash(f"❌ Error processing file: {str(e)}", "error")
+
+        else:
+            flash("⚠️ Please upload only .xls or .xlsx file!", "warning")
+
+    return render_template("admin_dashboard.html")
+
+
+# ------------------ DELETE SEMESTER ------------------
+@app.route("/admin/delete_semester", methods=["POST"])
+def delete_semester():
+    if "admin" not in session:
+        flash("⚠️ Please login first!", "warning")
+        return redirect(url_for("admin_login"))
+
+    year = request.form.get("delete_year")
+    semester = request.form.get("semester")
+
+    if not year or not semester:
+        flash("⚠️ Please select Year and Semester!", "warning")
+        return redirect(url_for("admin_dashboard"))
+
+    full_semester = f"{year} {semester}"
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("DELETE FROM results WHERE semester=?", (full_semester,))
+    deleted_rows = cursor.rowcount
+
+    conn.commit()
+    conn.close()
+
+    flash(f"✅ {full_semester} deleted successfully! Deleted Records: {deleted_rows}", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+# ------------------ UPLOAD HISTORY ------------------
+@app.route("/admin/upload_history")
+def upload_history():
+    if "admin" not in session:
+        flash("⚠️ Please login first!", "warning")
+        return redirect(url_for("admin_login"))
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT semester, filename, upload_type, inserted, updated, skipped, upload_time, uploaded_by
+        FROM upload_history
+        ORDER BY id DESC
+        LIMIT 100
+    """)
+    history = cursor.fetchall()
+
+    conn.close()
+
+    return render_template("upload_history.html", history=history)
+
+
+# ------------------ ADD NOTICE ------------------
+@app.route("/admin/add_notice", methods=["GET", "POST"])
+def add_notice():
+    if "admin" not in session:
+        flash("⚠️ Please login first!", "warning")
+        return redirect(url_for("admin_login"))
+
+    if request.method == "POST":
+        title = request.form.get("title", "").strip()
+        message = request.form.get("message", "").strip()
+        posted_on = datetime.now().strftime("%d-%m-%Y %I:%M %p")
+        posted_by = session.get("admin_user", "Admin")
+
+        if not title or not message:
+            flash("❌ Please fill all fields!", "error")
+            return redirect(url_for("add_notice"))
+
+        if len(title) < 5:
+            flash("❌ Title must be at least 5 characters!", "error")
+            return redirect(url_for("add_notice"))
+
+        if len(message) < 10:
+            flash("❌ Message must be at least 10 characters!", "error")
+            return redirect(url_for("add_notice"))
+
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+
+        cursor.execute("INSERT INTO notices (title, message, posted_on, posted_by) VALUES (?, ?, ?, ?)",
+                      (title, message, posted_on, posted_by))
+
+        conn.commit()
+        conn.close()
+
+        flash("✅ Notice added successfully!", "success")
+        return redirect(url_for("admin_dashboard"))
+
+    return render_template("add_notice.html")
+
+
+# ------------------ VIEW NOTICES ------------------
+@app.route("/admin/view_notices")
+def view_notices():
+    if "admin" not in session:
+        flash("⚠️ Please login first!", "warning")
+        return redirect(url_for("admin_login"))
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, title, message, posted_on, posted_by FROM notices ORDER BY id DESC")
+    notices = cursor.fetchall()
+
+    conn.close()
+
+    return render_template("view_notices.html", notices=notices)
+
+
+# ------------------ DELETE NOTICE ------------------
+@app.route("/admin/delete_notice/<int:notice_id>")
+def delete_notice(notice_id):
+    if "admin" not in session:
+        flash("⚠️ Please login first!", "warning")
+        return redirect(url_for("admin_login"))
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("DELETE FROM notices WHERE id=?", (notice_id,))
+    deleted = cursor.rowcount
+
+    conn.commit()
+    conn.close()
+
+    if deleted > 0:
+        flash("✅ Notice deleted successfully!", "success")
+    else:
+        flash("❌ Notice not found!", "error")
+
+    return redirect(url_for("view_notices"))
+
+
+# ------------------ ADD ADMIN ------------------
+@app.route("/admin/add_admin", methods=["GET", "POST"])
+def add_admin():
+    if "admin" not in session:
+        flash("⚠️ Please login first!", "warning")
+        return redirect(url_for("admin_login"))
+
+    # Only main admin can add new admins
+    if session.get("admin_user") != "admin":
+        flash("❌ Only main admin can add new admins!", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "").strip()
+
+        if not username or not password:
+            flash("❌ Please fill all fields!", "error")
+            return redirect(url_for("add_admin"))
+
+        if len(username) < 3:
+            flash("❌ Username must be at least 3 characters!", "error")
+            return redirect(url_for("add_admin"))
+
+        if len(password) < 6:
+            flash("❌ Password must be at least 6 characters!", "error")
+            return redirect(url_for("add_admin"))
+
+        hashed_pass = generate_password_hash(password)
+
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("INSERT INTO admins (username, password) VALUES (?, ?)",
+                          (username, hashed_pass))
+            conn.commit()
+            flash(f"✅ Admin '{username}' created successfully!", "success")
+        except sqlite3.IntegrityError:
+            flash(f"❌ Username '{username}' already exists!", "error")
+        finally:
+            conn.close()
+
+        return redirect(url_for("admin_dashboard"))
+
+    return render_template("add_admin.html")
+
+
+# ------------------ CHANGE PASSWORD ------------------
+@app.route("/admin/change_password", methods=["GET", "POST"])
+def change_password():
+    if "admin" not in session:
+        flash("⚠️ Please login first!", "warning")
+        return redirect(url_for("admin_login"))
+
+    if request.method == "POST":
+        try:
+            old_password = request.form.get("old_password", "").strip()
+            new_password = request.form.get("new_password", "").strip()
+            confirm_password = request.form.get("confirm_password", "").strip()
+
+            if not old_password or not new_password or not confirm_password:
+                flash("❌ All fields are required!", "error")
+                return redirect(url_for("change_password"))
+
+            if new_password != confirm_password:
+                flash("❌ New passwords do not match!", "error")
+                return redirect(url_for("change_password"))
+
+            if len(new_password) < 6:
+                flash("❌ Password must be at least 6 characters long!", "error")
+                return redirect(url_for("change_password"))
+
+            if new_password == old_password:
+                flash("❌ New password cannot be same as old password!", "error")
+                return redirect(url_for("change_password"))
+
+            username = session.get("admin_user")
+
+            if not username:
+                session.pop("admin", None)
+                flash("⚠️ Session expired. Please login again.", "warning")
+                return redirect(url_for("admin_login"))
+
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT password FROM admins WHERE username=?", (username,))
+            admin = cursor.fetchone()
+
+            if not admin:
+                conn.close()
+                session.pop("admin", None)
+                session.pop("admin_user", None)
+                flash("❌ Admin not found! Please login again.", "error")
+                return redirect(url_for("admin_login"))
+
+            if not check_password_hash(admin[0], old_password):
+                conn.close()
+                flash("❌ Current password is incorrect!", "error")
+                return redirect(url_for("change_password"))
+
+            hashed_new = generate_password_hash(new_password)
+            cursor.execute("UPDATE admins SET password=? WHERE username=?", (hashed_new, username))
+            conn.commit()
+
+            if cursor.rowcount > 0:
+                flash("✅ Password changed successfully! Please login with new password.", "success")
+                session.pop("admin", None)
+                session.pop("admin_user", None)
+                return redirect(url_for("admin_login"))
+            else:
+                flash("❌ Failed to update password. Please try again.", "error")
+
+            conn.close()
+
+        except Exception as e:
+            flash(f"❌ Error: {str(e)}", "error")
+
+        return redirect(url_for("change_password"))
+
+    return render_template("change_password.html")
+
+
+# ------------------ ADMIN LOGOUT ------------------
+@app.route("/admin/logout")
+def admin_logout():
+    username = session.get("admin_user", "Admin")
+    session.clear()
+    flash(f"👋 Goodbye, {username}! Logged out successfully.", "success")
+    return redirect(url_for("admin_login"))
+
+
+# ------------------ ERROR HANDLERS ------------------
+@app.errorhandler(404)
+def page_not_found(e):
+    flash("❌ Page not found!", "error")
+    return render_template("error.html", message="The page you are looking for does not exist."), 404
+
+
+@app.errorhandler(500)
+def internal_server_error(e):
+    flash("❌ Internal server error!", "error")
+    return render_template("error.html", message="Something went wrong. Please try again later."), 500
+
+
+# ------------------ RUN APPLICATION ------------------
+if __name__ == "__main__":
+    print("\n" + "="*60)
+    print("🚀 CUTM RESULT PORTAL STARTING...")
+    print("="*60)
+    print("📂 Database:", DB_NAME)
+    print("👤 Default Admin: admin / admin123")
+    print("🌐 URL: http://127.0.0.1:5000")
+    print("="*60 + "\n")
+    
+    app.run(debug=True, host='127.0.0.1', port=5000)

@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="result-card" style="max-width: 800px;">
+    <h1 class="result-title">
+        <i class="fas fa-bullhorn"></i> Add New Notice
+    </h1>
+
+    <!-- Quick Notice Templates -->
+    <div style="margin-bottom: 30px; background: var(--light); padding: 20px; border-radius: var(--border-radius-lg); border: 1px solid var(--border-color);">
+        <h3 style="color: var(--primary); margin-bottom: 15px;">
+            <i class="fas fa-magic"></i> Quick Templates
+        </h3>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+            <button type="button" class="template-btn" onclick="fillTemplate('result')" style="padding: 10px; background: var(--primary); color: white; border: none; border-radius: var(--border-radius-md); cursor: pointer;">
+                <i class="fas fa-graduation-cap"></i> New Result
+            </button>
+            <button type="button" class="template-btn" onclick="fillTemplate('rechecking')" style="padding: 10px; background: var(--warning); color: black; border: none; border-radius: var(--border-radius-md); cursor: pointer;">
+                <i class="fas fa-sync-alt"></i> Rechecking
+            </button>
+            <button type="button" class="template-btn" onclick="fillTemplate('holiday')" style="padding: 10px; background: var(--success); color: white; border: none; border-radius: var(--border-radius-md); cursor: pointer;">
+                <i class="fas fa-calendar-alt"></i> Holiday
+            </button>
+            <button type="button" class="template-btn" onclick="fillTemplate('exam')" style="padding: 10px; background: var(--danger); color: white; border: none; border-radius: var(--border-radius-md); cursor: pointer;">
+                <i class="fas fa-pencil-alt"></i> Exam Schedule
+            </button>
+        </div>
+    </div>
+
+    <form method="POST" id="noticeForm">
+        <div class="form-group">
+            <label><i class="fas fa-heading"></i> Notice Title:</label>
+            <input type="text" name="title" id="title" placeholder="e.g., 📢 New Result Uploaded" required>
+        </div>
+
+        <div class="form-group">
+            <label><i class="fas fa-align-left"></i> Notice Message:</label>
+            <textarea name="message" id="message" rows="8" placeholder="Enter detailed notice message..." required></textarea>
+            <small style="color: var(--gray); display: block; margin-top: 5px;">
+                <i class="fas fa-info-circle"></i> Maximum 500 characters
+            </small>
+        </div>
+
+        <!-- Preview Section -->
+        <div style="margin: 25px 0; padding: 20px; background: var(--light); border-radius: var(--border-radius-lg); border-left: 6px solid var(--primary);">
+            <h3 style="color: var(--primary); margin-bottom: 10px;">
+                <i class="fas fa-eye"></i> Live Preview:
+            </h3>
+            <div id="preview" style="background: white; padding: 20px; border-radius: var(--border-radius-md);">
+                <h4 id="previewTitle" style="color: var(--primary); margin-bottom: 10px;">Notice Title</h4>
+                <p id="previewMessage" style="color: var(--text-primary); line-height: 1.6;">Notice message will appear here...</p>
+                <small id="previewDate" style="color: var(--gray);">
+                    <i class="fas fa-clock"></i> Just now
+                </small>
+            </div>
+        </div>
+
+        <div style="display: flex; gap: 15px; margin-top: 30px;">
+            <button type="submit" style="flex: 2; background: var(--primary-gradient);">
+                <i class="fas fa-check-circle"></i> Post Notice
+            </button>
+            <a href="/admin/dashboard" class="back-btn" style="flex: 1; text-align: center;">
+                <i class="fas fa-arrow-left"></i> Back
+            </a>
+        </div>
+    </form>
+
+    <!-- Notice Guidelines -->
+    <div style="margin-top: 30px; padding: 20px; background: var(--light); border-radius: var(--border-radius-lg);">
+        <h3 style="color: var(--primary); margin-bottom: 10px;">
+            <i class="fas fa-lightbulb"></i> Notice Guidelines:
+        </h3>
+        <ul style="list-style: none; padding: 0;">
+            <li style="margin: 10px 0;">✓ Use clear and concise language</li>
+            <li style="margin: 10px 0;">✓ Include important dates if applicable</li>
+            <li style="margin: 10px 0;">✓ Add emojis for better visibility (📢 📅 ⚠️ ✅)</li>
+            <li style="margin: 10px 0;">✓ Mention batch/semester if specific</li>
+        </ul>
+    </div>
+</div>
+
+<!-- JavaScript for Template Filling and Preview -->
+<script>
+    // Template functions
+    function fillTemplate(type) {
+        const titleInput = document.getElementById('title');
+        const messageInput = document.getElementById('message');
+        
+        const templates = {
+            result: {
+                title: '📢 New Result Uploaded',
+                message: 'Result of BTECH 2023 Batch Semester 4 has been uploaded successfully.\n\nStudents can check their results by entering Registration Number and selecting appropriate semester.\n\n📅 Result Date: ' + new Date().toLocaleDateString('en-IN')
+            },
+            rechecking: {
+                title: '🔄 Rechecking Application Notice',
+                message: 'Applications for rechecking of answer scripts are invited from students who appeared in End Semester Examination.\n\n📅 Last Date: 20th March 2026\n\n⚠️ Late applications will not be entertained.'
+            },
+            holiday: {
+                title: '🏫 College Holiday Notice',
+                message: 'The college will remain closed on 15th March 2026 on account of Holi.\n\nAll academic activities will resume on 16th March 2026.\n\n🎉 Wishing everyone a Happy Holi!'
+            },
+            exam: {
+                title: '📝 End Semester Exam Schedule',
+                message: 'End Semester Examination schedule for BTECH 2023 Batch has been released.\n\n📅 Exam Start Date: 1st April 2026\n\nDownload schedule from college website.'
+            }
+        };
+        
+        if (templates[type]) {
+            titleInput.value = templates[type].title;
+            messageInput.value = templates[type].message;
+            updatePreview();
+        }
+    }
+    
+    // Live preview update
+    function updatePreview() {
+        const title = document.getElementById('title').value || 'Notice Title';
+        const message = document.getElementById('message').value || 'Notice message will appear here...';
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('en-IN') + ' ' + now.toLocaleTimeString('en-IN', {hour: '2-digit', minute:'2-digit'});
+        
+        document.getElementById('previewTitle').innerHTML = title;
+        document.getElementById('previewMessage').innerHTML = message.replace(/\n/g, '<br>');
+        document.getElementById('previewDate').innerHTML = '<i class="fas fa-clock"></i> ' + dateStr;
+    }
+    
+    // Add event listeners for live preview
+    document.getElementById('title').addEventListener('input', updatePreview);
+    document.getElementById('message').addEventListener('input', updatePreview);
+    
+    // Form validation
+    document.getElementById('noticeForm').addEventListener('submit', function(e) {
+        const title = document.getElementById('title').value.trim();
+        const message = document.getElementById('message').value.trim();
+        
+        if (title.length < 5) {
+            e.preventDefault();
+            alert('Title must be at least 5 characters long!');
+            return;
+        }
+        
+        if (message.length < 10) {
+            e.preventDefault();
+            alert('Message must be at least 10 characters long!');
+            return;
+        }
+        
+        if (message.length > 500) {
+            e.preventDefault();
+            alert('Message cannot exceed 500 characters!');
+            return;
+        }
+    });
+</script>
+
+<!-- Dark mode compatibility for preview -->
+<style>
+    .dark-mode #preview {
+        background: var(--bg-primary);
+    }
+    .dark-mode #preview p {
+        color: var(--text-primary);
+    }
+    .dark-mode .template-btn {
+        transition: var(--transition);
+    }
+    .dark-mode .template-btn:hover {
+        opacity: 0.9;
+        transform: translateY(-2px);
+    }
+</style>
+{% endblock %}

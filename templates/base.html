@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CUTM Result Portal - Professional Result Management System</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <div class="logo-area">
+            <img src="{{ url_for('static', filename='images/logo.png') }}" alt="CUTM Logo">
+            <h2 class="site-title">Student Result Portal</h2>
+        </div>
+
+        <!-- Hamburger Menu Icon -->
+        <div class="menu-toggle" id="menu-toggle">
+            <i class="fas fa-bars"></i>
+        </div>
+
+        <!-- Navigation Links -->
+        <ul class="nav-links" id="nav-links">
+            <li><a href="/"><i class="fas fa-home"></i> Home</a></li>
+            <li><a href="/about"><i class="fas fa-info-circle"></i> About</a></li>
+            <li><a href="/contact"><i class="fas fa-envelope"></i> Contact</a></li>
+            <li><a href="/admin"><i class="fas fa-user-shield"></i> Admin</a></li>
+        </ul>
+
+        <!-- Dark Mode Toggle -->
+        <button id="theme-toggle" class="theme-btn">
+            <i class="fas fa-moon"></i>
+        </button>
+    </nav>
+
+    <!-- Main Content Area -->
+    <div class="main-content">
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash-message flash-{{ category if category != 'message' else 'info' }}">
+                        <i class="fas fa-{% if category == 'success' %}check-circle
+                                           {% elif category == 'error' %}exclamation-circle
+                                           {% elif category == 'warning' %}exclamation-triangle
+                                           {% else %}info-circle{% endif %}"></i>
+                        <span>{{ message }}</span>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- Page Content -->
+        {% block content %}{% endblock %}
+    </div>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-content">
+            <p>Made <i class="fas fa-heart" style="color: #FFA500;"></i> by Aaham</p>
+            <p><i class="fas fa-envelope"></i> aahamkumararya1@gmail.com | <i class="fas fa-phone"></i> +91 7761853789</p>
+            <p class="copyright">© 2026 CUTM Result Portal. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <!-- JavaScript -->
+    <script>
+        // Navbar Toggle
+        const menuToggle = document.getElementById("menu-toggle");
+        const navLinks = document.getElementById("nav-links");
+
+        menuToggle.addEventListener("click", () => {
+            navLinks.classList.toggle("active");
+        });
+
+        // Dark Mode Toggle - Fixed
+        const toggleBtn = document.getElementById("theme-toggle");
+        const body = document.body;
+        const icon = toggleBtn.querySelector('i');
+
+        // Load saved theme
+        function applyTheme(theme) {
+            if (theme === "dark") {
+                body.classList.add("dark-mode");
+                icon.className = "fas fa-sun";
+            } else {
+                body.classList.remove("dark-mode");
+                icon.className = "fas fa-moon";
+            }
+        }
+
+        // Check localStorage
+        const savedTheme = localStorage.getItem("theme");
+        if (savedTheme) {
+            applyTheme(savedTheme);
+        } else {
+            // Check system preference
+            if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                applyTheme("dark");
+            } else {
+                applyTheme("light");
+            }
+        }
+
+        // Toggle theme
+        toggleBtn.addEventListener("click", () => {
+            if (body.classList.contains("dark-mode")) {
+                body.classList.remove("dark-mode");
+                localStorage.setItem("theme", "light");
+                icon.className = "fas fa-moon";
+            } else {
+                body.classList.add("dark-mode");
+                localStorage.setItem("theme", "dark");
+                icon.className = "fas fa-sun";
+            }
+        });
+
+        // Listen for system theme changes
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+            if (!localStorage.getItem('theme')) {
+                applyTheme(e.matches ? "dark" : "light");
+            }
+        });
+
+        // Close mobile menu when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!menuToggle.contains(e.target) && !navLinks.contains(e.target)) {
+                navLinks.classList.remove('active');
+            }
+        });
+    </script>
+
+</body>
+</html>
