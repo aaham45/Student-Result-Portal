@@ -473,128 +473,121 @@ def admin_dashboard():
         return redirect(url_for("admin_login"))
 
     if request.method == "POST":
-        year = request.form.get("year")
-        semester = request.form.get("semester")
-        upload_type = request.form.get("upload_type")
-        file = request.files.get("file")
+        try:
+            year = request.form.get("year")
+            semester = request.form.get("semester")
+            upload_type = request.form.get("upload_type")
+            file = request.files.get("file")
 
-        if not year or not semester or not upload_type:
-            flash("⚠️ Please select all fields!", "warning")
-            return redirect(url_for("admin_dashboard"))
+            print(f"📁 Upload attempt: Year={year}, Semester={semester}, Type={upload_type}, File={file.filename if file else 'None'}")
 
-        if not file or file.filename == '':
-            flash("⚠️ Please select a file!", "warning")
-            return redirect(url_for("admin_dashboard"))
+            if not year or not semester or not upload_type:
+                flash("⚠️ Please select all fields!", "warning")
+                return redirect(url_for("admin_dashboard"))
 
-        if file and (file.filename.endswith(".xls") or file.filename.endswith(".xlsx")):
-            filepath = os.path.join(app.config["UPLOAD_FOLDER"], file.filename)
-            file.save(filepath)
+            if not file or file.filename == '':
+                flash("⚠️ Please select a file!", "warning")
+                return redirect(url_for("admin_dashboard"))
 
+            if not (file.filename.endswith(".xls") or file.filename.endswith(".xlsx")):
+                flash("⚠️ Please upload only .xls or .xlsx file!", "warning")
+                return redirect(url_for("admin_dashboard"))
+
+            # Read Excel with error handling
             try:
-                df = pd.read_excel(filepath)
+                df = pd.read_excel(file)
+                print(f"✅ Excel loaded: {len(df)} rows, Columns: {list(df.columns)}")
+            except Exception as e:
+                print(f"❌ Failed to read Excel: {e}")
+                flash(f"❌ Failed to read Excel file: {str(e)}", "error")
+                return redirect(url_for("admin_dashboard"))
 
-                # Check required columns
-                required_cols = ["Reg_No", "Name", "Subject_Code", "Subject_Name", "Credits", "Grade"]
-                missing_cols = []
-                for col in required_cols:
-                    if col not in df.columns:
-                        missing_cols.append(col)
-
-                if missing_cols:
-                    flash(f"❌ Missing columns: {', '.join(missing_cols)}", "error")
+            required_cols = ["Reg_No", "Name", "Subject_Code", "Subject_Name", "Credits", "Grade"]
+            for col in required_cols:
+                if col not in df.columns:
+                    flash(f"❌ Missing column: {col}. Found columns: {list(df.columns)}", "error")
                     return redirect(url_for("admin_dashboard"))
 
-                conn = get_db_connection()
-                cursor = conn.cursor()
+            conn = get_db_connection()
+            cursor = conn.cursor()
 
-                inserted_count = 0
-                updated_count = 0
-                skipped_count = 0
+            inserted_count = 0
+            updated_count = 0
+            skipped_count = 0
+            error_count = 0
+            full_semester = f"{year} {semester}"
 
-                full_semester = f"{year} {semester}"
-
-                for _, row in df.iterrows():
-                    try:
-                        reg_no = str(row["Reg_No"]).split(".")[0].strip()
-                        name = str(row["Name"]).strip()
-                        subject_code = str(row["Subject_Code"]).strip()
-                        subject_name = str(row["Subject_Name"]).strip()
-                        credits = str(row["Credits"]).strip()
-                        credit_value = credit_to_float(credits)
-
-                        old_grade = str(row["Grade"]).strip().upper()
-                        new_grade = old_grade
-
-                        # Check for new grade columns in rechecking
-                        if "New Grade" in df.columns and pd.notna(row["New Grade"]):
-                            new_grade = str(row["New Grade"]).strip().upper()
-                        elif "New_Grade" in df.columns and pd.notna(row["New_Grade"]):
-                            new_grade = str(row["New_Grade"]).strip().upper()
-                        elif "New_Grad" in df.columns and pd.notna(row["New_Grad"]):
-                            new_grade = str(row["New_Grad"]).strip().upper()
-
-                        grade_point = GRADE_POINTS.get(new_grade, 0)
-
-                        # Check if record exists
-                        cursor.execute("""
-                            SELECT id FROM results
-                            WHERE semester=%s AND reg_no=%s AND subject_code=%s
-                        """, (full_semester, reg_no, subject_code))
-
-                        existing = cursor.fetchone()
-
-                        # For rechecking, only update if old grade was F
-                        if upload_type == "rechecking" and old_grade != "F":
-                            skipped_count += 1
-                            continue
-
-                        if existing:
-                            cursor.execute("""
-                                UPDATE results
-                                SET grade=%s, grade_point=%s, credits=%s, credit_value=%s, subject_name=%s, name=%s
-                                WHERE semester=%s AND reg_no=%s AND subject_code=%s
-                            """, (
-                                new_grade, grade_point, credits, credit_value, subject_name, name,
-                                full_semester, reg_no, subject_code
-                            ))
-                            updated_count += 1
-                        else:
-                            cursor.execute("""
-                                INSERT INTO results
-                                (semester, reg_no, name, subject_code, subject_name, credits, credit_value, grade, grade_point)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            """, (
-                                full_semester, reg_no, name, subject_code, subject_name,
-                                credits, credit_value, new_grade, grade_point
-                            ))
-                            inserted_count += 1
-
-                    except Exception as e:
-                        print(f"Error processing row: {e}")
+            for index, row in df.iterrows():
+                try:
+                    reg_no = str(row["Reg_No"]).strip()
+                    if not reg_no or reg_no == "nan":
+                        print(f"⚠️ Row {index}: Invalid Reg_No, skipping")
                         skipped_count += 1
                         continue
 
-                # Save to upload history
-                upload_time = datetime.now().strftime("%d-%m-%Y %I:%M %p")
-                username = session.get("admin_user", "Unknown")
+                    name = str(row["Name"]).strip()
+                    subject_code = str(row["Subject_Code"]).strip()
+                    subject_name = str(row["Subject_Name"]).strip()
+                    credits = str(row["Credits"]).strip()
+                    grade = str(row["Grade"]).strip().upper()
 
-                cursor.execute("""
-                    INSERT INTO upload_history
-                    (semester, filename, upload_type, inserted, updated, skipped, upload_time, uploaded_by)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """, (full_semester, file.filename, upload_type, inserted_count, updated_count, skipped_count, upload_time, username))
+                    credit_value = credit_to_float(credits)
+                    grade_point = GRADE_POINTS.get(grade, 0)
 
-                conn.commit()
-                cursor.close()
-                conn.close()
+                    print(f"✅ Row {index}: {reg_no} - {subject_code} - {grade}")
 
-                flash(f"✅ Upload Successful! Inserted: {inserted_count}, Updated: {updated_count}, Skipped: {skipped_count}", "success")
+                    # Check if exists
+                    cursor.execute("""
+                        SELECT id FROM results
+                        WHERE semester=%s AND reg_no=%s AND subject_code=%s
+                    """, (full_semester, reg_no, subject_code))
 
-            except Exception as e:
-                flash(f"❌ Error processing file: {str(e)}", "error")
+                    existing = cursor.fetchone()
 
-        else:
-            flash("⚠️ Please upload only .xls or .xlsx file!", "warning")
+                    if existing:
+                        cursor.execute("""
+                            UPDATE results
+                            SET name=%s, subject_name=%s, credits=%s, credit_value=%s, grade=%s, grade_point=%s
+                            WHERE semester=%s AND reg_no=%s AND subject_code=%s
+                        """, (name, subject_name, credits, credit_value, grade, grade_point, full_semester, reg_no, subject_code))
+                        updated_count += 1
+                    else:
+                        cursor.execute("""
+                            INSERT INTO results (semester, reg_no, name, subject_code, subject_name, credits, credit_value, grade, grade_point)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (full_semester, reg_no, name, subject_code, subject_name, credits, credit_value, grade, grade_point))
+                        inserted_count += 1
+
+                    conn.commit()
+
+                except Exception as e:
+                    print(f"❌ Row {index} error: {e}")
+                    error_count += 1
+                    continue
+
+            # Save upload history
+            upload_time = datetime.now().strftime("%d-%m-%Y %I:%M %p")
+            username = session.get("admin_user", "Unknown")
+
+            cursor.execute("""
+                INSERT INTO upload_history (semester, filename, upload_type, inserted, updated, skipped, upload_time, uploaded_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (full_semester, file.filename, upload_type, inserted_count, updated_count, skipped_count, upload_time, username))
+
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            print(f"📊 Upload complete: Inserted={inserted_count}, Updated={updated_count}, Skipped={skipped_count}, Errors={error_count}")
+            flash(f"✅ Upload Successful! Inserted: {inserted_count}, Updated: {updated_count}, Skipped: {skipped_count}, Errors: {error_count}", "success")
+
+        except Exception as e:
+            print(f"❌ Upload error: {e}")
+            import traceback
+            traceback.print_exc()
+            flash(f"❌ Error: {str(e)}", "error")
+
+        return redirect(url_for("admin_dashboard"))
 
     return render_template("admin_dashboard.html")
 
