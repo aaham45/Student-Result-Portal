@@ -872,6 +872,47 @@ def internal_server_error(e):
     flash("❌ Internal server error!", "error")
     return render_template("error.html", message="Something went wrong. Please try again later."), 500
 
+# ------------------ TEST UPLOAD ENDPOINT ------------------
+@app.route("/test-upload", methods=["GET", "POST"])
+def test_upload():
+    if request.method == "POST":
+        try:
+            file = request.files.get("file")
+            if not file:
+                return "No file uploaded"
+            
+            print(f"File received: {file.filename}")
+            
+            # Try to read Excel
+            df = pd.read_excel(file)
+            print(f"Excel read successful! Rows: {len(df)}")
+            print(f"Columns: {list(df.columns)}")
+            
+            # Check first row
+            first_row = df.iloc[0].to_dict()
+            print(f"First row: {first_row}")
+            
+            return f"""
+            Success!<br>
+            File: {file.filename}<br>
+            Rows: {len(df)}<br>
+            Columns: {list(df.columns)}<br>
+            First row: {first_row}
+            """
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"Error: {error_details}")
+            return f"Error: {str(e)}<br><pre>{error_details}</pre>"
+    
+    return '''
+    <form method="post" enctype="multipart/form-data">
+        <h2>Test Excel Upload</h2>
+        <input type="file" name="file" accept=".xls,.xlsx">
+        <button type="submit">Upload</button>
+    </form>
+    '''
+
 # ------------------ RUN APPLICATION ------------------
 if __name__ == "__main__":
     print("\n" + "="*60)
