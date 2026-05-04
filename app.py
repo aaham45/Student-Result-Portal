@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, session, send_file
+from flask import Flask, render_template, request, redirect, url_for, flash, session, send_file, jsonify
 import os
 import psycopg2
 from psycopg2.extras import DictCursor
@@ -8,6 +8,10 @@ from datetime import datetime
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from werkzeug.security import generate_password_hash, check_password_hash
+import threading
+import queue
+from werkzeug.utils import secure_filename
+import time
 
 app = Flask(__name__)
 app.secret_key = "resultportal_secret_key_2026_secure"
@@ -32,6 +36,124 @@ def get_db_connection():
     if not DATABASE_URL:
         raise Exception("DATABASE_URL environment variable not set!")
     return psycopg2.connect(DATABASE_URL, sslmode="require")
+
+# ==================== BACKGROUND JOB QUEUE ====================
+upload_queue = {}
+job_counter = 0
+
+def process_excel_in_background(job_id, filepath, year, semester, upload_type, username):
+    """Process Excel file in background"""
+    try:
+        print(f"🔵 Job {job_id}: Started processing")
+        
+        # Read entire file at once
+        if filepath.endswith('.xlsx'):
+            df = pd.read_excel(filepath, engine='openpyxl')
+        else:
+            df = pd.read_excel(filepath, engine='xlrd')
+        
+        total_rows = len(df)
+        print(f"📊 Job {job_id}: Loaded {total_rows} rows")
+        print(f"📊 Job {job_id}: Columns: {list(df.columns)}")
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        inserted_count = 0
+        updated_count = 0
+        skipped_count = 0
+        full_semester = f"{year} {semester}"
+        
+        # Process all rows
+        for index, row in df.iterrows():
+            try:
+                reg_no = str(row["Reg_No"]).strip()
+                if not reg_no or reg_no == "nan":
+                    skipped_count += 1
+                    continue
+                
+                name = str(row["Name"]).strip()
+                subject_code = str(row["Subject_Code"]).strip()
+                subject_name = str(row["Subject_Name"]).strip()
+                credits = str(row["Credits"]).strip()
+                grade = str(row["Grade"]).strip().upper()
+                
+                credit_value = credit_to_float(credits)
+                grade_point = GRADE_POINTS.get(grade, 0)
+                
+                # Check if exists
+                cursor.execute("""
+                    SELECT id FROM results
+                    WHERE semester=%s AND reg_no=%s AND subject_code=%s
+                """, (full_semester, reg_no, subject_code))
+                
+                if cursor.fetchone():
+                    cursor.execute("""
+                        UPDATE results
+                        SET name=%s, subject_name=%s, credits=%s, credit_value=%s, grade=%s, grade_point=%s
+                        WHERE semester=%s AND reg_no=%s AND subject_code=%s
+                    """, (name, subject_name, credits, credit_value, grade, grade_point, full_semester, reg_no, subject_code))
+                    updated_count += 1
+                else:
+                    cursor.execute("""
+                        INSERT INTO results (semester, reg_no, name, subject_code, subject_name, credits, credit_value, grade, grade_point)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (full_semester, reg_no, name, subject_code, subject_name, credits, credit_value, grade, grade_point))
+                    inserted_count += 1
+                
+                # Commit every 100 rows
+                if (inserted_count + updated_count) % 100 == 0:
+                    conn.commit()
+                    print(f"🟢 Job {job_id}: Processed {inserted_count + updated_count}/{total_rows} rows")
+                    
+            except Exception as e:
+                print(f"❌ Job {job_id} Row {index} error: {e}")
+                skipped_count += 1
+                continue
+        
+        conn.commit()
+        
+        # Save upload history
+        upload_time = datetime.now().strftime("%d-%m-%Y %I:%M %p")
+        cursor.execute("""
+            INSERT INTO upload_history (semester, filename, upload_type, inserted, updated, skipped, upload_time, uploaded_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (full_semester, os.path.basename(filepath), upload_type, inserted_count, updated_count, skipped_count, upload_time, username))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        # Clean up temp file
+        os.remove(filepath)
+        
+        print(f"✅ Job {job_id}: COMPLETED! Inserted={inserted_count}, Updated={updated_count}, Skipped={skipped_count}")
+        
+        # Update job status
+        upload_queue[job_id] = {
+            'status': 'completed',
+            'inserted': inserted_count,
+            'updated': updated_count,
+            'skipped': skipped_count,
+            'total': total_rows,
+            'semester': full_semester,
+            'filename': os.path.basename(filepath)
+        }
+        
+    except Exception as e:
+        print(f"❌ Job {job_id} Failed: {e}")
+        import traceback
+        traceback.print_exc()
+        upload_queue[job_id] = {
+            'status': 'failed',
+            'error': str(e)
+        }
+        # Clean up temp file if exists
+        try:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+        except:
+            pass
 
 # ------------------ CUTM GRADE POINTS SYSTEM ------------------
 GRADE_POINTS = {
@@ -475,7 +597,7 @@ def admin_login():
 
     return render_template("admin_login.html")
 
-# ------------------ ADMIN DASHBOARD ------------------
+# ------------------ ADMIN DASHBOARD (WITH BACKGROUND PROCESSING) ------------------
 @app.route("/admin/dashboard", methods=["GET", "POST"])
 def admin_dashboard():
     if "admin" not in session:
@@ -501,103 +623,66 @@ def admin_dashboard():
                 flash("⚠️ Please upload only .xls or .xlsx file!", "warning")
                 return redirect(url_for("admin_dashboard"))
 
-            # USE PANDAS - handles both .xls and .xlsx
-            df = pd.read_excel(file)
-            print(f"✅ Excel loaded: {len(df)} rows")
-            print(f"📊 Columns: {list(df.columns)}")
-
-            required_cols = ["Reg_No", "Name", "Subject_Code", "Subject_Name", "Credits", "Grade"]
-            missing_cols = [col for col in required_cols if col not in df.columns]
+            # Save file temporarily
+            filename = secure_filename(f"{datetime.now().timestamp()}_{file.filename}")
+            filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+            file.save(filepath)
             
-            if missing_cols:
-                flash(f"❌ Missing columns: {', '.join(missing_cols)}", "error")
+            # Quick validation - check columns
+            try:
+                if filepath.endswith('.xlsx'):
+                    df_check = pd.read_excel(filepath, nrows=1, engine='openpyxl')
+                else:
+                    df_check = pd.read_excel(filepath, nrows=1, engine='xlrd')
+                
+                required_cols = ["Reg_No", "Name", "Subject_Code", "Subject_Name", "Credits", "Grade"]
+                missing_cols = [col for col in required_cols if col not in df_check.columns]
+                
+                if missing_cols:
+                    os.remove(filepath)
+                    flash(f"❌ Missing columns: {', '.join(missing_cols)}. Found: {list(df_check.columns)}", "error")
+                    return redirect(url_for("admin_dashboard"))
+                    
+            except Exception as e:
+                os.remove(filepath)
+                flash(f"❌ Error reading file: {str(e)}", "error")
                 return redirect(url_for("admin_dashboard"))
-
-            conn = get_db_connection()
-            cursor = conn.cursor()
             
-            inserted_count = 0
-            updated_count = 0
-            skipped_count = 0
-            full_semester = f"{year} {semester}"
+            # Start background job
+            global job_counter
+            job_counter += 1
+            job_id = job_counter
             
-            # Process in batches to avoid timeout
-            batch_size = 200
-            total_rows = len(df)
-            
-            for start_idx in range(0, total_rows, batch_size):
-                end_idx = min(start_idx + batch_size, total_rows)
-                batch_df = df.iloc[start_idx:end_idx]
-                
-                for index, row in batch_df.iterrows():
-                    try:
-                        reg_no = str(row["Reg_No"]).strip()
-                        if not reg_no or reg_no == "nan":
-                            skipped_count += 1
-                            continue
-                        
-                        name = str(row["Name"]).strip()
-                        subject_code = str(row["Subject_Code"]).strip()
-                        subject_name = str(row["Subject_Name"]).strip()
-                        credits = str(row["Credits"]).strip()
-                        grade = str(row["Grade"]).strip().upper()
-                        
-                        credit_value = credit_to_float(credits)
-                        grade_point = GRADE_POINTS.get(grade, 0)
-                        
-                        # Check if exists
-                        cursor.execute("""
-                            SELECT id FROM results
-                            WHERE semester=%s AND reg_no=%s AND subject_code=%s
-                        """, (full_semester, reg_no, subject_code))
-                        
-                        if cursor.fetchone():
-                            cursor.execute("""
-                                UPDATE results
-                                SET name=%s, subject_name=%s, credits=%s, credit_value=%s, grade=%s, grade_point=%s
-                                WHERE semester=%s AND reg_no=%s AND subject_code=%s
-                            """, (name, subject_name, credits, credit_value, grade, grade_point, full_semester, reg_no, subject_code))
-                            updated_count += 1
-                        else:
-                            cursor.execute("""
-                                INSERT INTO results (semester, reg_no, name, subject_code, subject_name, credits, credit_value, grade, grade_point)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            """, (full_semester, reg_no, name, subject_code, subject_name, credits, credit_value, grade, grade_point))
-                            inserted_count += 1
-                        
-                    except Exception as e:
-                        print(f"Row error: {e}")
-                        skipped_count += 1
-                        continue
-                
-                # Commit after each batch
-                conn.commit()
-                print(f"✅ Processed {end_idx}/{total_rows} rows")
-            
-            # Save upload history
-            upload_time = datetime.now().strftime("%d-%m-%Y %I:%M %p")
             username = session.get("admin_user", "Unknown")
             
-            cursor.execute("""
-                INSERT INTO upload_history (semester, filename, upload_type, inserted, updated, skipped, upload_time, uploaded_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (full_semester, file.filename, upload_type, inserted_count, updated_count, skipped_count, upload_time, username))
+            upload_queue[job_id] = {'status': 'processing', 'started_at': datetime.now().strftime("%H:%M:%S")}
             
-            conn.commit()
-            cursor.close()
-            conn.close()
+            thread = threading.Thread(
+                target=process_excel_in_background,
+                args=(job_id, filepath, year, semester, upload_type, username)
+            )
+            thread.daemon = True
+            thread.start()
             
-            flash(f"✅ Upload Successful! Inserted: {inserted_count}, Updated: {updated_count}, Skipped: {skipped_count}", "success")
+            flash(f"✅ File uploaded! Processing started (Job #{job_id}). Total {len(df_check)} rows will be processed in background. Check 'Upload History' later for status.", "success")
             
         except Exception as e:
-            print(f"Upload error: {e}")
-            import traceback
-            traceback.print_exc()
             flash(f"❌ Error: {str(e)}", "error")
         
         return redirect(url_for("admin_dashboard"))
     
     return render_template("admin_dashboard.html")
+
+# ------------------ JOB STATUS API ------------------
+@app.route("/admin/job_status/<int:job_id>")
+def job_status(job_id):
+    if "admin" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    if job_id in upload_queue:
+        return jsonify(upload_queue[job_id])
+    else:
+        return jsonify({"status": "not_found"})
 
 # ------------------ DELETE SEMESTER ------------------
 @app.route("/admin/delete_semester", methods=["POST"])
@@ -879,47 +964,6 @@ def page_not_found(e):
 def internal_server_error(e):
     flash("❌ Internal server error!", "error")
     return render_template("error.html", message="Something went wrong. Please try again later."), 500
-
-# ------------------ TEST UPLOAD ENDPOINT ------------------
-@app.route("/test-upload", methods=["GET", "POST"])
-def test_upload():
-    if request.method == "POST":
-        try:
-            file = request.files.get("file")
-            if not file:
-                return "No file uploaded"
-            
-            print(f"File received: {file.filename}")
-            
-            # Try to read Excel
-            df = pd.read_excel(file)
-            print(f"Excel read successful! Rows: {len(df)}")
-            print(f"Columns: {list(df.columns)}")
-            
-            # Check first row
-            first_row = df.iloc[0].to_dict()
-            print(f"First row: {first_row}")
-            
-            return f"""
-            Success!<br>
-            File: {file.filename}<br>
-            Rows: {len(df)}<br>
-            Columns: {list(df.columns)}<br>
-            First row: {first_row}
-            """
-        except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
-            print(f"Error: {error_details}")
-            return f"Error: {str(e)}<br><pre>{error_details}</pre>"
-    
-    return '''
-    <form method="post" enctype="multipart/form-data">
-        <h2>Test Excel Upload</h2>
-        <input type="file" name="file" accept=".xls,.xlsx">
-        <button type="submit">Upload</button>
-    </form>
-    '''
 
 # ------------------ RUN APPLICATION ------------------
 if __name__ == "__main__":
