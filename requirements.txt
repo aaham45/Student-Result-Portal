@@ -5,3 +5,4 @@ xlrd
 reportlab
 Werkzeug
 psycopg2-binary
+gunicorn
