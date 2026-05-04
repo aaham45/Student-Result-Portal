@@ -1,7 +1,8 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, session, send_file
-import sqlite3
-import pandas as pd
 import os
+import psycopg2
+from psycopg2.extras import DictCursor
+import pandas as pd
 import io
 from datetime import datetime
 from reportlab.pdfgen import canvas
@@ -15,9 +16,22 @@ UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_NAME = os.path.join(BASE_DIR, "database.db")
+# ==================== POSTGRESQL DATABASE SETUP ====================
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
+# Fallback URL (remove this after setting environment variable on Render)
+if not DATABASE_URL:
+    DATABASE_URL = "postgresql://result_portal_db_user:3TI0q22twgpg53Dff9hjz8SRLPTCTHtO@dpg-d7s4b9ho3t8c73didi00-a.oregon-postgres.render.com/result_portal_db"
+
+# Fix for Render (sometimes requires sslmode)
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+def get_db_connection():
+    """Get database connection"""
+    if not DATABASE_URL:
+        raise Exception("DATABASE_URL environment variable not set!")
+    return psycopg2.connect(DATABASE_URL, sslmode="require")
 
 # ------------------ CUTM GRADE POINTS SYSTEM ------------------
 GRADE_POINTS = {
@@ -35,7 +49,6 @@ GRADE_POINTS = {
     "I": 0
 }
 
-
 # ------------------ CREDIT STRING TO FLOAT ------------------
 def credit_to_float(credit_str):
     try:
@@ -49,127 +62,127 @@ def credit_to_float(credit_str):
     except:
         return 0
 
-
 # ------------------ DATABASE SETUP ------------------
 def init_db():
     """Initialize database with all required tables"""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    # Results table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS results (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            semester TEXT NOT NULL,
-            reg_no TEXT NOT NULL,
-            name TEXT NOT NULL,
-            subject_code TEXT NOT NULL,
-            subject_name TEXT NOT NULL,
-            credits TEXT,
-            credit_value REAL,
-            grade TEXT,
-            grade_point REAL,
-            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        # Results table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS results (
+                id SERIAL PRIMARY KEY,
+                semester TEXT NOT NULL,
+                reg_no TEXT NOT NULL,
+                name TEXT NOT NULL,
+                subject_code TEXT NOT NULL,
+                subject_name TEXT NOT NULL,
+                credits TEXT,
+                credit_value REAL,
+                grade TEXT,
+                grade_point REAL,
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-    # Admins table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS admins (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_login TIMESTAMP
-        )
-    """)
+        # Admins table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS admins (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP
+            )
+        """)
 
-    # Upload history table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS upload_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            semester TEXT,
-            filename TEXT,
-            upload_type TEXT,
-            inserted INTEGER,
-            updated INTEGER,
-            skipped INTEGER,
-            upload_time TEXT,
-            uploaded_by TEXT
-        )
-    """)
+        # Upload history table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS upload_history (
+                id SERIAL PRIMARY KEY,
+                semester TEXT,
+                filename TEXT,
+                upload_type TEXT,
+                inserted INTEGER,
+                updated INTEGER,
+                skipped INTEGER,
+                upload_time TEXT,
+                uploaded_by TEXT
+            )
+        """)
 
-    # Notices table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS notices (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            message TEXT NOT NULL,
-            posted_on TEXT,
-            posted_by TEXT
-        )
-    """)
+        # Notices table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS notices (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                posted_on TEXT,
+                posted_by TEXT
+            )
+        """)
 
-    # Students table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            reg_no TEXT UNIQUE NOT NULL,
-            name TEXT NOT NULL,
-            email TEXT,
-            phone TEXT,
-            batch INTEGER,
-            branch TEXT,
-            photo TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        # Students table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS students (
+                id SERIAL PRIMARY KEY,
+                reg_no TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                email TEXT,
+                phone TEXT,
+                batch INTEGER,
+                branch TEXT,
+                photo TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-    # Check if admins table is empty
-    cursor.execute("SELECT COUNT(*) FROM admins")
-    count = cursor.fetchone()[0]
-    
-    if count == 0:
-        # Create default admin
-        hashed_pass = generate_password_hash("Aaham@8990")
-        cursor.execute("INSERT INTO admins (username, password) VALUES (?, ?)", ("aaham_18", hashed_pass))
-        print("✅ Default admin created: aaham_18ss / Aaham@8990")
-    else:
-        print(f"✅ Admins table has {count} record(s)")
+        # Check if admins table is empty
+        cursor.execute("SELECT COUNT(*) FROM admins")
+        count = cursor.fetchone()[0]
+        
+        if count == 0:
+            # Create default admin
+            hashed_pass = generate_password_hash("Aaham@8990")
+            cursor.execute("INSERT INTO admins (username, password) VALUES (%s, %s)", ("aaham_18", hashed_pass))
+            print("✅ Default admin created: aaham_18 / Aaham@8990")
+        else:
+            print(f"✅ Admins table has {count} record(s)")
 
-    conn.commit()
-    conn.close()
-    print("✅ Database initialized successfully")
-
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✅ Database initialized successfully")
+        
+    except Exception as e:
+        print(f"❌ Database initialization error: {e}")
 
 # Initialize database
 init_db()
 
-
 # ------------------ HOME PAGE ------------------
 @app.route("/")
 def home():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute("SELECT title, message, posted_on FROM notices ORDER BY id DESC LIMIT 5")
     notices = cursor.fetchall()
 
+    cursor.close()
     conn.close()
     return render_template("index.html", notices=notices)
-
 
 # ------------------ ABOUT PAGE ------------------
 @app.route("/about")
 def about():
     return render_template("about.html")
 
-
 # ------------------ CONTACT PAGE ------------------
 @app.route("/contact")
 def contact():
     return render_template("contact.html")
-
 
 # ------------------ SEARCH RESULT ------------------
 @app.route("/search", methods=["POST"])
@@ -184,19 +197,20 @@ def search_result():
 
     full_semester = f"{year} {semester}"
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
         SELECT subject_code, subject_name, credits, grade, credit_value, grade_point, name
         FROM results 
-        WHERE reg_no=? AND semester=?
+        WHERE reg_no=%s AND semester=%s
         ORDER BY subject_code
     """, (reg_no, full_semester))
 
     rows = cursor.fetchall()
 
     if not rows:
+        cursor.close()
         conn.close()
         flash("❌ Result not found! Please check Registration Number, Year or Semester.", "error")
         return render_template("error.html", message="Result not found! Please check Registration Number, Year or Semester.")
@@ -217,9 +231,10 @@ def search_result():
     cursor.execute("""
         SELECT credit_value, grade_point
         FROM results
-        WHERE reg_no=?
+        WHERE reg_no=%s
     """, (reg_no,))
     all_data = cursor.fetchall()
+    cursor.close()
     conn.close()
 
     total_all_credits = 0
@@ -254,25 +269,25 @@ def search_result():
         backlog_count=backlog_count
     )
 
-
 # ------------------ DOWNLOAD PDF ------------------
 @app.route("/download_pdf/<reg_no>/<semester>")
 def download_pdf(reg_no, semester):
     semester = semester.replace("_", " ")
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
         SELECT subject_code, subject_name, credits, grade, credit_value, grade_point, name
         FROM results
-        WHERE reg_no=? AND semester=?
+        WHERE reg_no=%s AND semester=%s
         ORDER BY subject_code
     """, (reg_no, semester))
 
     rows = cursor.fetchall()
 
     if not rows:
+        cursor.close()
         conn.close()
         flash("❌ Result not found for PDF generation!", "error")
         return redirect(url_for("home"))
@@ -293,9 +308,10 @@ def download_pdf(reg_no, semester):
     cursor.execute("""
         SELECT credit_value, grade_point
         FROM results
-        WHERE reg_no=?
+        WHERE reg_no=%s
     """, (reg_no,))
     all_data = cursor.fetchall()
+    cursor.close()
     conn.close()
 
     total_all_credits = 0
@@ -398,11 +414,10 @@ def download_pdf(reg_no, semester):
         mimetype="application/pdf"
     )
 
-
-# ------------------ ADMIN LOGIN (FIXED) ------------------
+# ------------------ ADMIN LOGIN ------------------
 @app.route("/admin", methods=["GET", "POST"])
 def admin_login():
-    """Admin login page - FIXED"""
+    """Admin login page"""
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "").strip()
@@ -412,11 +427,11 @@ def admin_login():
             return render_template("admin_login.html")
 
         try:
-            conn = sqlite3.connect(DB_NAME)
+            conn = get_db_connection()
             cursor = conn.cursor()
 
             # Get admin from database
-            cursor.execute("SELECT id, username, password FROM admins WHERE username=?", (username,))
+            cursor.execute("SELECT id, username, password FROM admins WHERE username=%s", (username,))
             admin = cursor.fetchone()
 
             if admin:
@@ -424,7 +439,7 @@ def admin_login():
                 if check_password_hash(admin[2], password):
                     # Update last login
                     now = datetime.now().strftime("%d-%m-%Y %I:%M %p")
-                    cursor.execute("UPDATE admins SET last_login=? WHERE id=?", (now, admin[0]))
+                    cursor.execute("UPDATE admins SET last_login=%s WHERE id=%s", (now, admin[0]))
                     conn.commit()
 
                     # Set session
@@ -434,6 +449,7 @@ def admin_login():
                     session["last_login"] = now
 
                     flash(f"✅ Welcome back, {admin[1]}!", "success")
+                    cursor.close()
                     conn.close()
                     return redirect(url_for("admin_dashboard"))
                 else:
@@ -441,13 +457,13 @@ def admin_login():
             else:
                 flash("❌ Username not found!", "error")
 
+            cursor.close()
             conn.close()
 
         except Exception as e:
             flash(f"❌ Login error: {str(e)}", "error")
 
     return render_template("admin_login.html")
-
 
 # ------------------ ADMIN DASHBOARD ------------------
 @app.route("/admin/dashboard", methods=["GET", "POST"])
@@ -488,7 +504,7 @@ def admin_dashboard():
                     flash(f"❌ Missing columns: {', '.join(missing_cols)}", "error")
                     return redirect(url_for("admin_dashboard"))
 
-                conn = sqlite3.connect(DB_NAME)
+                conn = get_db_connection()
                 cursor = conn.cursor()
 
                 inserted_count = 0
@@ -522,7 +538,7 @@ def admin_dashboard():
                         # Check if record exists
                         cursor.execute("""
                             SELECT id FROM results
-                            WHERE semester=? AND reg_no=? AND subject_code=?
+                            WHERE semester=%s AND reg_no=%s AND subject_code=%s
                         """, (full_semester, reg_no, subject_code))
 
                         existing = cursor.fetchone()
@@ -535,8 +551,8 @@ def admin_dashboard():
                         if existing:
                             cursor.execute("""
                                 UPDATE results
-                                SET grade=?, grade_point=?, credits=?, credit_value=?, subject_name=?, name=?
-                                WHERE semester=? AND reg_no=? AND subject_code=?
+                                SET grade=%s, grade_point=%s, credits=%s, credit_value=%s, subject_name=%s, name=%s
+                                WHERE semester=%s AND reg_no=%s AND subject_code=%s
                             """, (
                                 new_grade, grade_point, credits, credit_value, subject_name, name,
                                 full_semester, reg_no, subject_code
@@ -546,7 +562,7 @@ def admin_dashboard():
                             cursor.execute("""
                                 INSERT INTO results
                                 (semester, reg_no, name, subject_code, subject_name, credits, credit_value, grade, grade_point)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """, (
                                 full_semester, reg_no, name, subject_code, subject_name,
                                 credits, credit_value, new_grade, grade_point
@@ -565,10 +581,11 @@ def admin_dashboard():
                 cursor.execute("""
                     INSERT INTO upload_history
                     (semester, filename, upload_type, inserted, updated, skipped, upload_time, uploaded_by)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """, (full_semester, file.filename, upload_type, inserted_count, updated_count, skipped_count, upload_time, username))
 
                 conn.commit()
+                cursor.close()
                 conn.close()
 
                 flash(f"✅ Upload Successful! Inserted: {inserted_count}, Updated: {updated_count}, Skipped: {skipped_count}", "success")
@@ -580,7 +597,6 @@ def admin_dashboard():
             flash("⚠️ Please upload only .xls or .xlsx file!", "warning")
 
     return render_template("admin_dashboard.html")
-
 
 # ------------------ DELETE SEMESTER ------------------
 @app.route("/admin/delete_semester", methods=["POST"])
@@ -598,18 +614,18 @@ def delete_semester():
 
     full_semester = f"{year} {semester}"
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute("DELETE FROM results WHERE semester=?", (full_semester,))
+    cursor.execute("DELETE FROM results WHERE semester=%s", (full_semester,))
     deleted_rows = cursor.rowcount
 
     conn.commit()
+    cursor.close()
     conn.close()
 
     flash(f"✅ {full_semester} deleted successfully! Deleted Records: {deleted_rows}", "success")
     return redirect(url_for("admin_dashboard"))
-
 
 # ------------------ UPLOAD HISTORY ------------------
 @app.route("/admin/upload_history")
@@ -618,7 +634,7 @@ def upload_history():
         flash("⚠️ Please login first!", "warning")
         return redirect(url_for("admin_login"))
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -629,10 +645,10 @@ def upload_history():
     """)
     history = cursor.fetchall()
 
+    cursor.close()
     conn.close()
 
     return render_template("upload_history.html", history=history)
-
 
 # ------------------ ADD NOTICE ------------------
 @app.route("/admin/add_notice", methods=["GET", "POST"])
@@ -659,20 +675,20 @@ def add_notice():
             flash("❌ Message must be at least 10 characters!", "error")
             return redirect(url_for("add_notice"))
 
-        conn = sqlite3.connect(DB_NAME)
+        conn = get_db_connection()
         cursor = conn.cursor()
 
-        cursor.execute("INSERT INTO notices (title, message, posted_on, posted_by) VALUES (?, ?, ?, ?)",
+        cursor.execute("INSERT INTO notices (title, message, posted_on, posted_by) VALUES (%s, %s, %s, %s)",
                       (title, message, posted_on, posted_by))
 
         conn.commit()
+        cursor.close()
         conn.close()
 
         flash("✅ Notice added successfully!", "success")
         return redirect(url_for("admin_dashboard"))
 
     return render_template("add_notice.html")
-
 
 # ------------------ VIEW NOTICES ------------------
 @app.route("/admin/view_notices")
@@ -681,16 +697,16 @@ def view_notices():
         flash("⚠️ Please login first!", "warning")
         return redirect(url_for("admin_login"))
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute("SELECT id, title, message, posted_on, posted_by FROM notices ORDER BY id DESC")
     notices = cursor.fetchall()
 
+    cursor.close()
     conn.close()
 
     return render_template("view_notices.html", notices=notices)
-
 
 # ------------------ DELETE NOTICE ------------------
 @app.route("/admin/delete_notice/<int:notice_id>")
@@ -699,13 +715,14 @@ def delete_notice(notice_id):
         flash("⚠️ Please login first!", "warning")
         return redirect(url_for("admin_login"))
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute("DELETE FROM notices WHERE id=?", (notice_id,))
+    cursor.execute("DELETE FROM notices WHERE id=%s", (notice_id,))
     deleted = cursor.rowcount
 
     conn.commit()
+    cursor.close()
     conn.close()
 
     if deleted > 0:
@@ -715,7 +732,6 @@ def delete_notice(notice_id):
 
     return redirect(url_for("view_notices"))
 
-
 # ------------------ ADD ADMIN ------------------
 @app.route("/admin/add_admin", methods=["GET", "POST"])
 def add_admin():
@@ -724,7 +740,7 @@ def add_admin():
         return redirect(url_for("admin_login"))
 
     # Only main admin can add new admins
-    if session.get("admin_user") != "admin":
+    if session.get("admin_user") != "aaham_18":
         flash("❌ Only main admin can add new admins!", "error")
         return redirect(url_for("admin_dashboard"))
 
@@ -746,23 +762,23 @@ def add_admin():
 
         hashed_pass = generate_password_hash(password)
 
-        conn = sqlite3.connect(DB_NAME)
+        conn = get_db_connection()
         cursor = conn.cursor()
 
         try:
-            cursor.execute("INSERT INTO admins (username, password) VALUES (?, ?)",
+            cursor.execute("INSERT INTO admins (username, password) VALUES (%s, %s)",
                           (username, hashed_pass))
             conn.commit()
             flash(f"✅ Admin '{username}' created successfully!", "success")
-        except sqlite3.IntegrityError:
+        except psycopg2.IntegrityError:
             flash(f"❌ Username '{username}' already exists!", "error")
         finally:
+            cursor.close()
             conn.close()
 
         return redirect(url_for("admin_dashboard"))
 
     return render_template("add_admin.html")
-
 
 # ------------------ CHANGE PASSWORD ------------------
 @app.route("/admin/change_password", methods=["GET", "POST"])
@@ -800,13 +816,14 @@ def change_password():
                 flash("⚠️ Session expired. Please login again.", "warning")
                 return redirect(url_for("admin_login"))
 
-            conn = sqlite3.connect(DB_NAME)
+            conn = get_db_connection()
             cursor = conn.cursor()
 
-            cursor.execute("SELECT password FROM admins WHERE username=?", (username,))
+            cursor.execute("SELECT password FROM admins WHERE username=%s", (username,))
             admin = cursor.fetchone()
 
             if not admin:
+                cursor.close()
                 conn.close()
                 session.pop("admin", None)
                 session.pop("admin_user", None)
@@ -814,22 +831,26 @@ def change_password():
                 return redirect(url_for("admin_login"))
 
             if not check_password_hash(admin[0], old_password):
+                cursor.close()
                 conn.close()
                 flash("❌ Current password is incorrect!", "error")
                 return redirect(url_for("change_password"))
 
             hashed_new = generate_password_hash(new_password)
-            cursor.execute("UPDATE admins SET password=? WHERE username=?", (hashed_new, username))
+            cursor.execute("UPDATE admins SET password=%s WHERE username=%s", (hashed_new, username))
             conn.commit()
 
             if cursor.rowcount > 0:
                 flash("✅ Password changed successfully! Please login with new password.", "success")
                 session.pop("admin", None)
                 session.pop("admin_user", None)
+                cursor.close()
+                conn.close()
                 return redirect(url_for("admin_login"))
             else:
                 flash("❌ Failed to update password. Please try again.", "error")
 
+            cursor.close()
             conn.close()
 
         except Exception as e:
@@ -839,7 +860,6 @@ def change_password():
 
     return render_template("change_password.html")
 
-
 # ------------------ ADMIN LOGOUT ------------------
 @app.route("/admin/logout")
 def admin_logout():
@@ -848,27 +868,24 @@ def admin_logout():
     flash(f"👋 Goodbye, {username}! Logged out successfully.", "success")
     return redirect(url_for("admin_login"))
 
-
 # ------------------ ERROR HANDLERS ------------------
 @app.errorhandler(404)
 def page_not_found(e):
     flash("❌ Page not found!", "error")
     return render_template("error.html", message="The page you are looking for does not exist."), 404
 
-
 @app.errorhandler(500)
 def internal_server_error(e):
     flash("❌ Internal server error!", "error")
     return render_template("error.html", message="Something went wrong. Please try again later."), 500
-
 
 # ------------------ RUN APPLICATION ------------------
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("🚀 CUTM RESULT PORTAL STARTING...")
     print("="*60)
-    print("📂 Database:", DB_NAME)
-    print("👤 Default Admin: xyz / xyz123")
+    print("🐘 Using PostgreSQL database")
+    print("👤 Default Admin: aaham_18 / Aaham@8990")
     print("🌐 URL: http://127.0.0.1:5000")
     print("="*60 + "\n")
     

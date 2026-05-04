@@ -1,6 +1,7 @@
-Flask==2.3.3
-pandas==2.2.3
-openpyxl==3.1.5
-xlrd==2.0.1
-reportlab==4.2.2
-gunicorn==21.2.0
+Flask
+pandas
+openpyxl
+xlrd
+reportlab
+Werkzeug
+psycopg2-binary
